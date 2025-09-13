@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  equipos-app:
+    build: .
+    container_name: sistema-equipos
+    ports:
+      - "${EXTERNAL_PORT:-8501}:8501"
+    volumes:
+      # Persistir base de datos SQLite en directorio data
+      - ./data:/app/data
+    env_file:
+      - .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+# Para producción, puedes agregar un volumen nombrado
+volumes:
+  equipos_data:
+    driver: local

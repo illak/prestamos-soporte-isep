@@ -14,3 +14,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+
+
+dockerizado/.env
+dockerizado/equipos.db
