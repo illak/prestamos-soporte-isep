@@ -218,6 +218,14 @@ def obtener_empleados_activos():
 # Inicializar base de datos
 init_database()
 
+# Inicializar session_state para navegación y precarga
+if 'navegar_a_registro' not in st.session_state:
+    st.session_state.navegar_a_registro = False
+if 'equipo_precargado' not in st.session_state:
+    st.session_state.equipo_precargado = None
+if 'operacion_precargada' not in st.session_state:
+    st.session_state.operacion_precargada = None
+
 # Título principal
 st.title("💻 Sistema de Préstamos de Equipos")
 
@@ -228,10 +236,27 @@ nombre_equipo_qr = query_params.get("nombre_equipo", "")
 
 # Sidebar para navegación
 st.sidebar.title("Navegación")
+
+# Determinar la opción por defecto
+if 'opcion_navegacion' not in st.session_state:
+    st.session_state.opcion_navegacion = "📋 Registro de Préstamos/Devoluciones"
+
+# Si hay una solicitud de navegación desde Gestión de Equipos
+if st.session_state.navegar_a_registro:
+    st.session_state.opcion_navegacion = "📋 Registro de Préstamos/Devoluciones"
+    st.session_state.navegar_a_registro = False
+
+opciones_menu = ["📋 Registro de Préstamos/Devoluciones", "📦 Gestión de Equipos", "📊 Reportes", "🔍 QR Codes"]
+opcion_index = opciones_menu.index(st.session_state.opcion_navegacion) if st.session_state.opcion_navegacion in opciones_menu else 0
+
 opcion = st.sidebar.radio(
     "Selecciona una opción:",
-    ["📋 Registro de Préstamos/Devoluciones", "📦 Gestión de Equipos", "📊 Reportes", "🔍 QR Codes"]
+    opciones_menu,
+    index=opcion_index
 )
+
+# Actualizar la opción en session_state
+st.session_state.opcion_navegacion = opcion
 
 if opcion == "📋 Registro de Préstamos/Devoluciones":
     st.header("Registro de Préstamos y Devoluciones")
@@ -242,12 +267,29 @@ if opcion == "📋 Registro de Préstamos/Devoluciones":
     if equipos_df.empty:
         st.warning("⚠️ No hay equipos registrados. Por favor, agrega equipos en la sección 'Gestión de Equipos'.")
     else:
+        # Verificar si hay datos precargados desde Gestión de Equipos
+        equipo_id_precargado = st.session_state.equipo_precargado
+        operacion_precargada = st.session_state.operacion_precargada
+
+        # Limpiar session_state después de leer
+        if equipo_id_precargado:
+            st.session_state.equipo_precargado = None
+            st.session_state.operacion_precargada = None
+            st.info(f"🎯 Operación precargada desde Gestión de Equipos")
+
         col1, col2 = st.columns(2)
 
         with col2:
+            # Si hay operación precargada, usarla como default
+            if operacion_precargada:
+                operacion_index = 0 if operacion_precargada == "Entrega" else 1
+            else:
+                operacion_index = 0
+
             tipo_operacion = st.selectbox(
                 "Tipo de Operación",
-                ["Entrega", "Devolución"]
+                ["Entrega", "Devolución"],
+                index=operacion_index
             )
 
         with col1:
@@ -260,8 +302,10 @@ if opcion == "📋 Registro de Préstamos/Devoluciones":
                     st.warning("⚠️ No hay equipos disponibles para préstamo.")
                     equipo_id = None
                 else:
-                    # Si viene del QR, intentar pre-seleccionar
-                    if equipo_id_qr and equipo_id_qr in equipos_disponibles['id'].values:
+                    # Prioridad: 1. Precargado desde Gestión, 2. QR, 3. Primero de la lista
+                    if equipo_id_precargado and equipo_id_precargado in equipos_disponibles['id'].values:
+                        indice_default = equipos_disponibles['id'].tolist().index(equipo_id_precargado)
+                    elif equipo_id_qr and equipo_id_qr in equipos_disponibles['id'].values:
                         indice_default = equipos_disponibles['id'].tolist().index(equipo_id_qr)
                     else:
                         indice_default = 0
@@ -283,8 +327,10 @@ if opcion == "📋 Registro de Préstamos/Devoluciones":
                     st.warning("⚠️ No hay equipos prestados para devolver.")
                     equipo_id = None
                 else:
-                    # Si viene del QR, intentar pre-seleccionar
-                    if equipo_id_qr and equipo_id_qr in equipos_prestados['id'].values:
+                    # Prioridad: 1. Precargado desde Gestión, 2. QR, 3. Primero de la lista
+                    if equipo_id_precargado and equipo_id_precargado in equipos_prestados['id'].values:
+                        indice_default = equipos_prestados['id'].tolist().index(equipo_id_precargado)
+                    elif equipo_id_qr and equipo_id_qr in equipos_prestados['id'].values:
                         indice_default = equipos_prestados['id'].tolist().index(equipo_id_qr)
                     else:
                         indice_default = 0
@@ -439,22 +485,45 @@ elif opcion == "📦 Gestión de Equipos":
     # Mostrar equipos existentes
     st.subheader("Equipos Registrados")
     equipos_df = obtener_equipos()
-    
+
     if not equipos_df.empty:
-        # Agregar información de estado actual
-        estados_detallados = []
-        for _, equipo in equipos_df.iterrows():
+        st.markdown("📋 **Listado de equipos** - Usa los botones de acción para prestar o devolver")
+        st.markdown("---")
+
+        # Mostrar cada equipo con botones de acción
+        for idx, equipo in equipos_df.iterrows():
             estado, usuario, fecha = obtener_estado_equipo(equipo['id'])
-            estados_detallados.append({
-                'ID': equipo['id'],
-                'Nombre': equipo['nombre'],
-                'Tipo': equipo['tipo'],
-                'Estado': estado,
-                'Usuario Actual': usuario if usuario else '-',
-                'Ult. Fecha. Act.': fecha if fecha else '-'
-            })
-        
-        st.dataframe(pd.DataFrame(estados_detallados), use_container_width=True)
+
+            # Crear columnas para mostrar información y botón
+            col_info, col_action = st.columns([4, 1])
+
+            with col_info:
+                # Mostrar información del equipo
+                if estado == 'Disponible':
+                    st.success(f"**{equipo['id']}** - {equipo['nombre']} ({equipo['tipo']}) - ✅ **Disponible**")
+                else:
+                    st.warning(f"**{equipo['id']}** - {equipo['nombre']} ({equipo['tipo']}) - ⚠️ **Prestado a:** {usuario}")
+                    if fecha:
+                        st.caption(f"Desde: {fecha}")
+
+            with col_action:
+                # Botón de acción según el estado
+                if estado == 'Disponible':
+                    if st.button("🔄 Prestar", key=f"prestar_{equipo['id']}"):
+                        # Guardar datos en session_state y cambiar de vista
+                        st.session_state.equipo_precargado = equipo['id']
+                        st.session_state.operacion_precargada = "Entrega"
+                        st.session_state.navegar_a_registro = True
+                        st.rerun()
+                else:
+                    if st.button("↩️ Devolver", key=f"devolver_{equipo['id']}"):
+                        # Guardar datos en session_state y cambiar de vista
+                        st.session_state.equipo_precargado = equipo['id']
+                        st.session_state.operacion_precargada = "Devolución"
+                        st.session_state.navegar_a_registro = True
+                        st.rerun()
+
+            st.markdown("---")
     else:
         st.info("No hay equipos registrados")
 
