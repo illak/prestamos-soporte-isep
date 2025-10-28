@@ -265,21 +265,16 @@ if opcion == "📋 Registro de Préstamos/Devoluciones":
         st.warning("⚠️ No hay equipos registrados. Por favor, agrega equipos en la sección 'Gestión de Equipos'.")
     else:
         # Verificar si hay datos precargados desde Gestión de Equipos
-        equipo_id_precargado = st.session_state.equipo_precargado
-        operacion_precargada = st.session_state.operacion_precargada
-
-        # Limpiar session_state después de leer
-        if equipo_id_precargado:
-            st.session_state.equipo_precargado = None
-            st.session_state.operacion_precargada = None
+        # NO limpiarlos aún - mantenerlos hasta que se complete la operación
+        if st.session_state.equipo_precargado:
             st.info(f"🎯 Operación precargada desde Gestión de Equipos")
 
         col1, col2 = st.columns(2)
 
         with col2:
             # Si hay operación precargada, usarla como default
-            if operacion_precargada:
-                operacion_index = 0 if operacion_precargada == "Entrega" else 1
+            if st.session_state.operacion_precargada:
+                operacion_index = 0 if st.session_state.operacion_precargada == "Entrega" else 1
             else:
                 operacion_index = 0
 
@@ -300,8 +295,8 @@ if opcion == "📋 Registro de Préstamos/Devoluciones":
                     equipo_id = None
                 else:
                     # Prioridad: 1. Precargado desde Gestión, 2. QR, 3. Primero de la lista
-                    if equipo_id_precargado and equipo_id_precargado in equipos_disponibles['id'].values:
-                        indice_default = equipos_disponibles['id'].tolist().index(equipo_id_precargado)
+                    if st.session_state.equipo_precargado and st.session_state.equipo_precargado in equipos_disponibles['id'].values:
+                        indice_default = equipos_disponibles['id'].tolist().index(st.session_state.equipo_precargado)
                     elif equipo_id_qr and equipo_id_qr in equipos_disponibles['id'].values:
                         indice_default = equipos_disponibles['id'].tolist().index(equipo_id_qr)
                     else:
@@ -325,8 +320,8 @@ if opcion == "📋 Registro de Préstamos/Devoluciones":
                     equipo_id = None
                 else:
                     # Prioridad: 1. Precargado desde Gestión, 2. QR, 3. Primero de la lista
-                    if equipo_id_precargado and equipo_id_precargado in equipos_prestados['id'].values:
-                        indice_default = equipos_prestados['id'].tolist().index(equipo_id_precargado)
+                    if st.session_state.equipo_precargado and st.session_state.equipo_precargado in equipos_prestados['id'].values:
+                        indice_default = equipos_prestados['id'].tolist().index(st.session_state.equipo_precargado)
                     elif equipo_id_qr and equipo_id_qr in equipos_prestados['id'].values:
                         indice_default = equipos_prestados['id'].tolist().index(equipo_id_qr)
                     else:
@@ -449,6 +444,9 @@ if opcion == "📋 Registro de Préstamos/Devoluciones":
                             st.error("❌ No se puede devolver un equipo que no está prestado")
                         else:
                             registrar_transaccion(equipo_id, empleado, email, area, tipo_operacion, observaciones, responsable)
+                            # Limpiar datos precargados después de registro exitoso
+                            st.session_state.equipo_precargado = None
+                            st.session_state.operacion_precargada = None
                             st.success(f"✅ {tipo_operacion} registrada exitosamente")
                             st.rerun()
                 else:
@@ -457,8 +455,13 @@ if opcion == "📋 Registro de Préstamos/Devoluciones":
                 st.error("❌ Por favor selecciona un equipo")
 
 elif opcion == "📦 Gestión de Equipos":
+    # Limpiar datos precargados si el usuario cambió manualmente de vista
+    if st.session_state.equipo_precargado or st.session_state.operacion_precargada:
+        st.session_state.equipo_precargado = None
+        st.session_state.operacion_precargada = None
+
     st.header("Gestión de Equipos")
-    
+
     # Agregar nuevo equipo
     st.subheader("Agregar Nuevo Equipo")
     col1, col2, col3 = st.columns(3)
@@ -525,8 +528,13 @@ elif opcion == "📦 Gestión de Equipos":
         st.info("No hay equipos registrados")
 
 elif opcion == "📊 Reportes":
+    # Limpiar datos precargados si el usuario cambió manualmente de vista
+    if st.session_state.equipo_precargado or st.session_state.operacion_precargada:
+        st.session_state.equipo_precargado = None
+        st.session_state.operacion_precargada = None
+
     st.header("Reportes y Estadísticas")
-    
+
     # Resumen general
     equipos_df = obtener_equipos()
     transacciones_df = obtener_transacciones()
@@ -557,8 +565,13 @@ elif opcion == "📊 Reportes":
         st.info("No hay transacciones registradas")
 
 elif opcion == "🔍 QR Codes":
+    # Limpiar datos precargados si el usuario cambió manualmente de vista
+    if st.session_state.equipo_precargado or st.session_state.operacion_precargada:
+        st.session_state.equipo_precargado = None
+        st.session_state.operacion_precargada = None
+
     st.header("Generador de Códigos QR")
-    
+
     # Seleccionar equipo para generar QR
     equipos_df = obtener_equipos()
     
