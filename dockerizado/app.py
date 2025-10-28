@@ -237,26 +237,23 @@ nombre_equipo_qr = query_params.get("nombre_equipo", "")
 # Sidebar para navegación
 st.sidebar.title("Navegación")
 
-# Determinar la opción por defecto
-if 'opcion_navegacion' not in st.session_state:
-    st.session_state.opcion_navegacion = "📋 Registro de Préstamos/Devoluciones"
+opciones_menu = ["📋 Registro de Préstamos/Devoluciones", "📦 Gestión de Equipos", "📊 Reportes", "🔍 QR Codes"]
 
-# Si hay una solicitud de navegación desde Gestión de Equipos
+# Inicializar el menú en session_state si no existe
+if 'menu_principal' not in st.session_state:
+    st.session_state.menu_principal = opciones_menu[0]
+
+# Si hay solicitud de navegación programática desde Gestión de Equipos
 if st.session_state.navegar_a_registro:
-    st.session_state.opcion_navegacion = "📋 Registro de Préstamos/Devoluciones"
+    st.session_state.menu_principal = opciones_menu[0]  # Forzar "Registro de Préstamos/Devoluciones"
     st.session_state.navegar_a_registro = False
 
-opciones_menu = ["📋 Registro de Préstamos/Devoluciones", "📦 Gestión de Equipos", "📊 Reportes", "🔍 QR Codes"]
-opcion_index = opciones_menu.index(st.session_state.opcion_navegacion) if st.session_state.opcion_navegacion in opciones_menu else 0
-
+# Radio button - el key hace que Streamlit maneje automáticamente el estado
 opcion = st.sidebar.radio(
     "Selecciona una opción:",
     opciones_menu,
-    index=opcion_index
+    key='menu_principal'
 )
-
-# Actualizar la opción en session_state
-st.session_state.opcion_navegacion = opcion
 
 if opcion == "📋 Registro de Préstamos/Devoluciones":
     st.header("Registro de Préstamos y Devoluciones")
