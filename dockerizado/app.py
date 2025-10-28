@@ -276,10 +276,10 @@ def importar_empleados_csv(df_csv):
     for idx, row in df_csv.iterrows():
         try:
             # Validar que existan las columnas requeridas
-            area = str(row.get('area', row.get('Area', row.get('AREA', ''))).strip()
-            nombre = str(row.get('nombre', row.get('Nombre', row.get('NOMBRE', ''))).strip()
-            apellido = str(row.get('apellido', row.get('Apellido', row.get('APELLIDO', ''))).strip()
-            email = str(row.get('email', row.get('Email', row.get('EMAIL', ''))).strip()
+            area = str(row.get('area', row.get('Area', row.get('AREA', '')))).strip()
+            nombre = str(row.get('nombre', row.get('Nombre', row.get('NOMBRE', '')))).strip()
+            apellido = str(row.get('apellido', row.get('Apellido', row.get('APELLIDO', '')))).strip()
+            email = str(row.get('email', row.get('Email', row.get('EMAIL', '')))).strip()
 
             if not area or not nombre or not apellido:
                 errores.append(f"Fila {idx + 2}: Faltan datos requeridos (área, nombre o apellido)")
