@@ -155,7 +155,7 @@ def obtener_equipos():
 def obtener_transacciones():
     conn = sqlite3.connect(DB_PATH)
     df = pd.read_sql_query('''
-        SELECT t.*, e.nombre as nombre_equipo 
+        SELECT t.*, e.nombre as nombre_equipo
         FROM transacciones t
         LEFT JOIN equipos e ON t.equipo_id = e.id
         ORDER BY t.fecha_hora DESC
@@ -163,6 +163,57 @@ def obtener_transacciones():
     conn.close()
 
     return df
+
+# Función para obtener equipos prestados con información del empleado
+def obtener_equipos_prestados():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    # Obtener todos los equipos prestados
+    cursor.execute('SELECT id, nombre FROM equipos WHERE estado = "Prestado" ORDER BY id')
+    equipos_prestados = cursor.fetchall()
+
+    # Para cada equipo prestado, obtener el último empleado
+    resultado = []
+    for equipo_id, nombre_equipo in equipos_prestados:
+        cursor.execute('''
+            SELECT empleado, email, area, fecha_hora
+            FROM transacciones
+            WHERE equipo_id = ? AND tipo_operacion = 'Entrega'
+            ORDER BY fecha_hora DESC
+            LIMIT 1
+        ''', (equipo_id,))
+
+        transaccion = cursor.fetchone()
+        if transaccion:
+            resultado.append({
+                'equipo_id': equipo_id,
+                'nombre_equipo': nombre_equipo,
+                'empleado': transaccion[0],
+                'email': transaccion[1],
+                'area': transaccion[2],
+                'fecha_prestamo': transaccion[3]
+            })
+
+    conn.close()
+    return resultado
+
+# Función para obtener lista de empleados únicos que han recibido préstamos
+def obtener_empleados_activos():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute('''
+        SELECT DISTINCT empleado, email, area
+        FROM transacciones
+        WHERE tipo_operacion = 'Entrega'
+        ORDER BY empleado
+    ''')
+
+    empleados = cursor.fetchall()
+    conn.close()
+
+    return [{'empleado': e[0], 'email': e[1], 'area': e[2]} for e in empleados]
 
 # Inicializar base de datos
 init_database()
@@ -184,103 +235,183 @@ opcion = st.sidebar.radio(
 
 if opcion == "📋 Registro de Préstamos/Devoluciones":
     st.header("Registro de Préstamos y Devoluciones")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        # Prellenar datos si vienen del QR
-        equipo_id = st.text_input("ID del Equipo", value=equipo_id_qr)
-        
-        if equipo_id:
-            # Obtener información del equipo
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute('SELECT nombre, tipo FROM equipos WHERE id = ?', (equipo_id,))
-            equipo_info = cursor.fetchone()
-            conn.close()
-            
-            if equipo_info:
-                st.success(f"Equipo: {equipo_info[0]} ({equipo_info[1]})")
-                estado, usuario_actual, fecha_actual = obtener_estado_equipo(equipo_id)
-                
-                if estado == 'Prestado':
-                    st.warning(f"⚠️ Equipo prestado a: {usuario_actual} desde {fecha_actual}")
+
+    # Obtener lista de equipos registrados
+    equipos_df = obtener_equipos()
+
+    if equipos_df.empty:
+        st.warning("⚠️ No hay equipos registrados. Por favor, agrega equipos en la sección 'Gestión de Equipos'.")
+    else:
+        col1, col2 = st.columns(2)
+
+        with col2:
+            tipo_operacion = st.selectbox(
+                "Tipo de Operación",
+                ["Entrega", "Devolución"]
+            )
+
+        with col1:
+            # Determinar qué equipos mostrar según el tipo de operación
+            if tipo_operacion == "Entrega":
+                # Para entregas, mostrar solo equipos disponibles
+                equipos_disponibles = equipos_df[equipos_df['estado'] == 'Disponible']
+
+                if equipos_disponibles.empty:
+                    st.warning("⚠️ No hay equipos disponibles para préstamo.")
+                    equipo_id = None
                 else:
-                    st.info("✅ Equipo disponible")
-            else:
-                st.error("❌ Equipo no encontrado")
-    
-    with col2:
-        tipo_operacion = st.selectbox(
-            "Tipo de Operación",
-            ["Entrega", "Devolución"]
-        )
-    
-    # Campos del formulario
-    col3, col4 = st.columns(2)
-    
-    with col3:
-        empleado = st.text_input("Nombre del Empleado")
-        email = st.text_input("Email del Empleado")
-        
-    with col4:
-        area = st.text_input("Área/Departamento")
-        responsable = st.text_input("Responsable de IT")
-    
-    observaciones = st.text_area("Observaciones (opcional)")
-    
-    if st.button("✅ Registrar Operación", type="primary"):
-        # Verificar que el equipo existe
+                    # Si viene del QR, intentar pre-seleccionar
+                    if equipo_id_qr and equipo_id_qr in equipos_disponibles['id'].values:
+                        indice_default = equipos_disponibles['id'].tolist().index(equipo_id_qr)
+                    else:
+                        indice_default = 0
+
+                    equipo_seleccionado = st.selectbox(
+                        "Selecciona el Equipo",
+                        options=equipos_disponibles['id'].tolist(),
+                        format_func=lambda x: f"{x} - {equipos_disponibles[equipos_disponibles['id']==x]['nombre'].iloc[0]}",
+                        index=indice_default,
+                        key="equipo_entrega"
+                    )
+                    equipo_id = equipo_seleccionado
+
+            else:  # Devolución
+                # Para devoluciones, mostrar solo equipos prestados
+                equipos_prestados = equipos_df[equipos_df['estado'] == 'Prestado']
+
+                if equipos_prestados.empty:
+                    st.warning("⚠️ No hay equipos prestados para devolver.")
+                    equipo_id = None
+                else:
+                    # Si viene del QR, intentar pre-seleccionar
+                    if equipo_id_qr and equipo_id_qr in equipos_prestados['id'].values:
+                        indice_default = equipos_prestados['id'].tolist().index(equipo_id_qr)
+                    else:
+                        indice_default = 0
+
+                    equipo_seleccionado = st.selectbox(
+                        "Selecciona el Equipo",
+                        options=equipos_prestados['id'].tolist(),
+                        format_func=lambda x: f"{x} - {equipos_prestados[equipos_prestados['id']==x]['nombre'].iloc[0]}",
+                        index=indice_default,
+                        key="equipo_devolucion"
+                    )
+                    equipo_id = equipo_seleccionado
+
+        # Mostrar información del equipo seleccionado
         if equipo_id:
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute('SELECT estado FROM equipos WHERE id = ?', (equipo_id,))
-            equipo_existe = cursor.fetchone()
-            conn.close()
-            
-            if equipo_existe:
-                estado_actual = equipo_existe[0]
-                
-                # Validar campos obligatorios según el tipo de operación
-                campos_obligatorios_ok = False
-                
-                if tipo_operacion == 'Entrega':
-                    # Para entregas, siempre se requieren empleado y responsable
-                    if empleado and responsable:
-                        campos_obligatorios_ok = True
-                    else:
-                        st.error("❌ Para entregas son obligatorios: Empleado y Responsable")
-                
-                elif tipo_operacion == 'Devolución':
-                    # Para devoluciones de equipos prestados, no se requieren campos obligatorios
-                    if estado_actual == 'Prestado':
-                        campos_obligatorios_ok = True
-                        # Si no se proporcionan datos, usar valores por defecto
-                        if not empleado:
-                            empleado = "No especificado"
-                        if not responsable:
-                            responsable = "Devolución automática"
-                    else:
-                        # Si el equipo no está prestado, requiere empleado y responsable
+            equipo_info = equipos_df[equipos_df['id'] == equipo_id].iloc[0]
+            st.success(f"📦 Equipo: {equipo_info['nombre']} ({equipo_info['tipo']})")
+
+            estado, usuario_actual, fecha_actual = obtener_estado_equipo(equipo_id)
+
+            if estado == 'Prestado':
+                st.warning(f"⚠️ Equipo prestado a: {usuario_actual} desde {fecha_actual}")
+            else:
+                st.info("✅ Equipo disponible")
+
+        # Campos del formulario
+        st.markdown("---")
+
+        # Para devoluciones, obtener datos del préstamo activo
+        empleado = ""
+        email = ""
+        area = ""
+
+        if equipo_id and tipo_operacion == "Devolución":
+            # Obtener información del préstamo activo
+            equipos_prestados_info = obtener_equipos_prestados()
+            equipo_prestado_info = next((e for e in equipos_prestados_info if e['equipo_id'] == equipo_id), None)
+
+            if equipo_prestado_info:
+                st.info(f"🔍 Préstamo activo a: **{equipo_prestado_info['empleado']}** ({equipo_prestado_info['email']}) - {equipo_prestado_info['area']}")
+                # Pre-llenar los campos con los datos del préstamo activo
+                empleado = equipo_prestado_info['empleado']
+                email = equipo_prestado_info['email'] if equipo_prestado_info['email'] else ""
+                area = equipo_prestado_info['area'] if equipo_prestado_info['area'] else ""
+
+        col3, col4 = st.columns(2)
+
+        with col3:
+            if tipo_operacion == "Entrega":
+                # Para entregas, obtener lista de empleados anteriores para sugerencias
+                empleados_anteriores = obtener_empleados_activos()
+                empleados_nombres = [""] + [e['empleado'] for e in empleados_anteriores]
+
+                empleado_idx = st.selectbox(
+                    "Nombre del Empleado",
+                    options=range(len(empleados_nombres)),
+                    format_func=lambda x: empleados_nombres[x] if empleados_nombres[x] else "-- Nuevo empleado --",
+                    key="empleado_select"
+                )
+
+                if empleado_idx > 0:
+                    empleado = empleados_nombres[empleado_idx]
+                    # Auto-completar email y área si existen
+                    empleado_info = empleados_anteriores[empleado_idx - 1]
+                    email = empleado_info['email'] if empleado_info['email'] else ""
+                    area = empleado_info['area'] if empleado_info['area'] else ""
+                else:
+                    empleado = st.text_input("Escribe el nombre del empleado", key="empleado_nuevo")
+                    email = st.text_input("Email del Empleado", key="email_nuevo")
+            else:
+                # Para devoluciones, mostrar el empleado del préstamo activo como solo lectura
+                st.text_input("Nombre del Empleado", value=empleado, disabled=True, key="empleado_devolucion")
+                st.text_input("Email del Empleado", value=email, disabled=True, key="email_devolucion")
+
+        with col4:
+            if tipo_operacion == "Entrega":
+                area = st.text_input("Área/Departamento", value=area, key="area_entrega")
+            else:
+                area = st.text_input("Área/Departamento", value=area, disabled=True, key="area_devolucion")
+
+            responsable = st.text_input("Responsable de IT", key="responsable")
+
+        observaciones = st.text_area("Observaciones (opcional)")
+
+        if st.button("✅ Registrar Operación", type="primary"):
+            # Verificar que el equipo existe
+            if equipo_id:
+                conn = sqlite3.connect(DB_PATH)
+                cursor = conn.cursor()
+                cursor.execute('SELECT estado FROM equipos WHERE id = ?', (equipo_id,))
+                equipo_existe = cursor.fetchone()
+                conn.close()
+
+                if equipo_existe:
+                    estado_actual = equipo_existe[0]
+
+                    # Validar campos obligatorios según el tipo de operación
+                    campos_obligatorios_ok = False
+
+                    if tipo_operacion == 'Entrega':
+                        # Para entregas, siempre se requieren empleado y responsable
                         if empleado and responsable:
                             campos_obligatorios_ok = True
                         else:
-                            st.error("❌ Para devoluciones de equipos disponibles son obligatorios: Empleado y Responsable")
-                
-                if campos_obligatorios_ok:
-                    # Validaciones de estado
-                    if tipo_operacion == 'Entrega' and estado_actual == 'Prestado':
-                        st.error("❌ No se puede entregar un equipo que ya está prestado")
-                    elif tipo_operacion == 'Devolución' and estado_actual == 'Disponible':
-                        st.error("❌ No se puede devolver un equipo que no está prestado")
-                    else:
-                        registrar_transaccion(equipo_id, empleado, email, area, tipo_operacion, observaciones, responsable)
-                        st.success(f"✅ {tipo_operacion} registrada exitosamente")                   
-                        st.balloons()
+                            st.error("❌ Para entregas son obligatorios: Empleado y Responsable")
+
+                    elif tipo_operacion == 'Devolución':
+                        # Para devoluciones de equipos prestados, solo se requiere responsable
+                        if responsable:
+                            campos_obligatorios_ok = True
+                        else:
+                            st.error("❌ Para devoluciones es obligatorio: Responsable")
+
+                    if campos_obligatorios_ok:
+                        # Validaciones de estado
+                        if tipo_operacion == 'Entrega' and estado_actual == 'Prestado':
+                            st.error("❌ No se puede entregar un equipo que ya está prestado")
+                        elif tipo_operacion == 'Devolución' and estado_actual == 'Disponible':
+                            st.error("❌ No se puede devolver un equipo que no está prestado")
+                        else:
+                            registrar_transaccion(equipo_id, empleado, email, area, tipo_operacion, observaciones, responsable)
+                            st.success(f"✅ {tipo_operacion} registrada exitosamente")
+                            st.rerun()
+                else:
+                    st.error("❌ El equipo no existe en el sistema")
             else:
-                st.error("❌ El equipo no existe en el sistema")
-        else:
-            st.error("❌ Por favor ingresa el ID del equipo")
+                st.error("❌ Por favor selecciona un equipo")
 
 elif opcion == "📦 Gestión de Equipos":
     st.header("Gestión de Equipos")
