@@ -22,7 +22,7 @@ DB_PATH = os.getenv('DB_PATH', 'equipos.db')
 def init_database():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
+
     # Tabla de equipos
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS equipos (
@@ -32,7 +32,19 @@ def init_database():
             estado TEXT DEFAULT 'Disponible'
         )
     ''')
-    
+
+    # Tabla de empleados
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS empleados (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT NOT NULL,
+            apellido TEXT NOT NULL,
+            area TEXT NOT NULL,
+            email TEXT,
+            fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
     # Tabla de transacciones
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS transacciones (
@@ -48,7 +60,7 @@ def init_database():
             FOREIGN KEY (equipo_id) REFERENCES equipos (id)
         )
     ''')
-    
+
     conn.commit()
     conn.close()
 
@@ -215,6 +227,124 @@ def obtener_empleados_activos():
 
     return [{'empleado': e[0], 'email': e[1], 'area': e[2]} for e in empleados]
 
+# ===== FUNCIONES DE GESTIÓN DE EMPLEADOS =====
+
+def obtener_empleados():
+    """Obtiene todos los empleados de la BD"""
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query('SELECT * FROM empleados ORDER BY area, apellido, nombre', conn)
+    conn.close()
+    return df
+
+def obtener_areas():
+    """Obtiene lista única de áreas/departamentos"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('SELECT DISTINCT area FROM empleados ORDER BY area')
+    areas = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return areas
+
+def agregar_empleado(nombre, apellido, area, email=""):
+    """Agrega un nuevo empleado a la BD"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            'INSERT INTO empleados (nombre, apellido, area, email) VALUES (?, ?, ?, ?)',
+            (nombre, apellido, area, email)
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        conn.close()
+        return False
+
+def importar_empleados_csv(df_csv):
+    """
+    Importa empleados desde un DataFrame de pandas.
+    Espera columnas: area, nombre, apellido (email es opcional)
+    Retorna: (total_importados, errores)
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    importados = 0
+    errores = []
+
+    for idx, row in df_csv.iterrows():
+        try:
+            # Validar que existan las columnas requeridas
+            area = str(row.get('area', row.get('Area', row.get('AREA', ''))).strip()
+            nombre = str(row.get('nombre', row.get('Nombre', row.get('NOMBRE', ''))).strip()
+            apellido = str(row.get('apellido', row.get('Apellido', row.get('APELLIDO', ''))).strip()
+            email = str(row.get('email', row.get('Email', row.get('EMAIL', ''))).strip()
+
+            if not area or not nombre or not apellido:
+                errores.append(f"Fila {idx + 2}: Faltan datos requeridos (área, nombre o apellido)")
+                continue
+
+            cursor.execute(
+                'INSERT INTO empleados (nombre, apellido, area, email) VALUES (?, ?, ?, ?)',
+                (nombre, apellido, area, email)
+            )
+            importados += 1
+
+        except Exception as e:
+            errores.append(f"Fila {idx + 2}: {str(e)}")
+
+    conn.commit()
+    conn.close()
+
+    return importados, errores
+
+def eliminar_empleado(empleado_id):
+    """Elimina un empleado por su ID"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute('DELETE FROM empleados WHERE id = ?', (empleado_id,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        conn.close()
+        return False
+
+def buscar_empleado_por_nombre_completo(nombre_completo):
+    """Busca un empleado por su nombre completo y retorna sus datos"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    # Intentar buscar como "Nombre Apellido"
+    partes = nombre_completo.strip().split(maxsplit=1)
+    if len(partes) == 2:
+        nombre, apellido = partes
+        cursor.execute(
+            'SELECT id, nombre, apellido, area, email FROM empleados WHERE nombre = ? AND apellido = ?',
+            (nombre, apellido)
+        )
+    else:
+        # Si no hay apellido, buscar solo por nombre
+        cursor.execute(
+            'SELECT id, nombre, apellido, area, email FROM empleados WHERE nombre = ?',
+            (nombre_completo,)
+        )
+
+    resultado = cursor.fetchone()
+    conn.close()
+
+    if resultado:
+        return {
+            'id': resultado[0],
+            'nombre': resultado[1],
+            'apellido': resultado[2],
+            'area': resultado[3],
+            'email': resultado[4]
+        }
+    return None
+
 # Inicializar base de datos
 init_database()
 
@@ -237,7 +367,7 @@ nombre_equipo_qr = query_params.get("nombre_equipo", "")
 # Sidebar para navegación
 st.sidebar.title("Navegación")
 
-opciones_menu = ["📋 Registro de Préstamos/Devoluciones", "📦 Gestión de Equipos", "📊 Reportes", "🔍 QR Codes"]
+opciones_menu = ["📋 Registro de Préstamos/Devoluciones", "📦 Gestión de Equipos", "👥 Gestión de Empleados", "📊 Reportes", "🔍 QR Codes"]
 
 # Inicializar el menú en session_state si no existe
 if 'menu_principal' not in st.session_state:
@@ -372,26 +502,51 @@ if opcion == "📋 Registro de Préstamos/Devoluciones":
 
         with col3:
             if tipo_operacion == "Entrega":
-                # Para entregas, obtener lista de empleados anteriores para sugerencias
-                empleados_anteriores = obtener_empleados_activos()
-                empleados_nombres = [""] + [e['empleado'] for e in empleados_anteriores]
+                # Para entregas, obtener lista de empleados desde la BD
+                empleados_bd = obtener_empleados()
+                empleado_de_bd = False  # Flag para saber si seleccionó un empleado de BD
 
-                empleado_idx = st.selectbox(
-                    "Nombre del Empleado",
-                    options=range(len(empleados_nombres)),
-                    format_func=lambda x: empleados_nombres[x] if empleados_nombres[x] else "-- Nuevo empleado --",
-                    key="empleado_select"
-                )
+                if not empleados_bd.empty:
+                    # Crear lista de empleados con formato "Nombre Apellido (Área)"
+                    empleados_opciones = ["-- Nuevo empleado --"] + [
+                        f"{row['nombre']} {row['apellido']} ({row['area']})"
+                        for _, row in empleados_bd.iterrows()
+                    ]
 
-                if empleado_idx > 0:
-                    empleado = empleados_nombres[empleado_idx]
-                    # Auto-completar email y área si existen
-                    empleado_info = empleados_anteriores[empleado_idx - 1]
-                    email = empleado_info['email'] if empleado_info['email'] else ""
-                    area = empleado_info['area'] if empleado_info['area'] else ""
+                    empleado_seleccionado = st.selectbox(
+                        "Nombre del Empleado",
+                        options=empleados_opciones,
+                        key="empleado_select"
+                    )
+
+                    if empleado_seleccionado != "-- Nuevo empleado --":
+                        # Extraer índice del empleado seleccionado
+                        idx_emp = empleados_opciones.index(empleado_seleccionado) - 1
+                        emp_data = empleados_bd.iloc[idx_emp]
+
+                        # Auto-completar datos
+                        empleado = f"{emp_data['nombre']} {emp_data['apellido']}"
+                        email = emp_data['email'] if pd.notna(emp_data['email']) else ""
+                        area = emp_data['area']
+                        empleado_de_bd = True
+
+                        # Mostrar info del empleado seleccionado
+                        st.info(f"📧 {email if email else 'Sin email'}")
+                    else:
+                        # Modo manual - nuevo empleado
+                        st.markdown("**Agregar nuevo empleado:**")
+                        empleado_nombre = st.text_input("Nombre", key="empleado_nuevo_nombre")
+                        empleado_apellido = st.text_input("Apellido", key="empleado_nuevo_apellido")
+                        empleado = f"{empleado_nombre} {empleado_apellido}".strip() if empleado_nombre or empleado_apellido else ""
+                        email = st.text_input("Email (opcional)", key="email_nuevo")
                 else:
-                    empleado = st.text_input("Escribe el nombre del empleado", key="empleado_nuevo")
-                    email = st.text_input("Email del Empleado", key="email_nuevo")
+                    # No hay empleados en la BD, usar modo manual
+                    st.warning("⚠️ No hay empleados registrados. Agrégalos en 'Gestión de Empleados'")
+                    empleado_nombre = st.text_input("Nombre", key="empleado_nuevo_nombre_alt")
+                    empleado_apellido = st.text_input("Apellido", key="empleado_nuevo_apellido_alt")
+                    empleado = f"{empleado_nombre} {empleado_apellido}".strip() if empleado_nombre or empleado_apellido else ""
+                    email = st.text_input("Email (opcional)", key="email_nuevo_alt")
+                    area = ""
             else:
                 # Para devoluciones, mostrar el empleado del préstamo activo como solo lectura
                 st.text_input("Nombre del Empleado", value=empleado, disabled=True, key="empleado_devolucion")
@@ -399,8 +554,29 @@ if opcion == "📋 Registro de Préstamos/Devoluciones":
 
         with col4:
             if tipo_operacion == "Entrega":
-                area = st.text_input("Área/Departamento", value=area, key="area_entrega")
+                # Obtener áreas desde la BD de empleados
+                areas_disponibles = obtener_areas()
+
+                # Si seleccionó empleado de BD, mostrar área como solo lectura
+                if 'empleado_de_bd' in locals() and empleado_de_bd:
+                    st.text_input("Área/Departamento", value=area, disabled=True, key="area_readonly")
+                elif areas_disponibles:
+                    # Hay áreas disponibles, mostrar selectbox con opción de nueva
+                    usar_area_existente = st.checkbox("Usar área existente", value=True, key="usar_area_existente")
+
+                    if usar_area_existente:
+                        area = st.selectbox(
+                            "Área/Departamento",
+                            options=areas_disponibles,
+                            key="area_select"
+                        )
+                    else:
+                        area = st.text_input("Nueva Área/Departamento", key="area_nueva")
+                else:
+                    # No hay áreas, campo de texto libre
+                    area = st.text_input("Área/Departamento", value=area if 'area' in locals() else "", key="area_entrega")
             else:
+                # Para devoluciones, área es solo lectura
                 area = st.text_input("Área/Departamento", value=area, disabled=True, key="area_devolucion")
 
             responsable = st.text_input("Responsable de IT", key="responsable")
@@ -526,6 +702,186 @@ elif opcion == "📦 Gestión de Equipos":
             st.markdown("---")
     else:
         st.info("No hay equipos registrados")
+
+elif opcion == "👥 Gestión de Empleados":
+    # Limpiar datos precargados si el usuario cambió manualmente de vista
+    if st.session_state.equipo_precargado or st.session_state.operacion_precargada:
+        st.session_state.equipo_precargado = None
+        st.session_state.operacion_precargada = None
+
+    st.header("Gestión de Empleados")
+
+    # Crear tabs para organizar mejor
+    tab1, tab2, tab3 = st.tabs(["📥 Importar CSV", "➕ Agregar Manualmente", "📋 Lista de Empleados"])
+
+    with tab1:
+        st.subheader("Importar Empleados desde CSV")
+
+        st.markdown("""
+        **Formato del archivo CSV:**
+        - Debe contener las siguientes columnas: `area`, `nombre`, `apellido`
+        - Opcionalmente puede incluir: `email`
+        - Las columnas pueden estar en mayúsculas, minúsculas o capitalizado
+        - Ejemplo:
+
+        ```
+        area,nombre,apellido,email
+        Sistemas,Juan,Pérez,juan.perez@empresa.com
+        Recursos Humanos,María,González,maria.gonzalez@empresa.com
+        Contabilidad,Carlos,Rodríguez,
+        ```
+        """)
+
+        archivo_csv = st.file_uploader(
+            "Selecciona el archivo CSV",
+            type=['csv'],
+            help="El archivo debe tener las columnas: area, nombre, apellido (email es opcional)"
+        )
+
+        if archivo_csv is not None:
+            try:
+                # Leer el CSV
+                df_csv = pd.read_csv(archivo_csv)
+
+                # Mostrar vista previa
+                st.info(f"📄 Archivo cargado: **{archivo_csv.name}** - {len(df_csv)} filas detectadas")
+                st.dataframe(df_csv.head(10), use_container_width=True)
+
+                # Botón para importar
+                if st.button("📤 Importar Empleados", type="primary"):
+                    importados, errores = importar_empleados_csv(df_csv)
+
+                    if importados > 0:
+                        st.success(f"✅ Se importaron {importados} empleados exitosamente")
+
+                    if errores:
+                        st.warning(f"⚠️ Se encontraron {len(errores)} errores:")
+                        with st.expander("Ver detalles de errores"):
+                            for error in errores:
+                                st.error(error)
+
+                    st.rerun()
+
+            except Exception as e:
+                st.error(f"❌ Error al leer el archivo CSV: {str(e)}")
+                st.info("Verifica que el archivo tenga el formato correcto y las columnas requeridas.")
+
+    with tab2:
+        st.subheader("Agregar Empleado Manualmente")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            nombre = st.text_input("Nombre *", key="nuevo_emp_nombre")
+            apellido = st.text_input("Apellido *", key="nuevo_emp_apellido")
+
+        with col2:
+            # Obtener áreas existentes para el desplegable
+            areas_existentes = obtener_areas()
+
+            if areas_existentes:
+                usar_existente = st.checkbox("Usar área existente", value=True)
+
+                if usar_existente:
+                    area = st.selectbox(
+                        "Área/Departamento *",
+                        options=areas_existentes,
+                        key="nuevo_emp_area_select"
+                    )
+                else:
+                    area = st.text_input(
+                        "Nueva Área/Departamento *",
+                        key="nuevo_emp_area_text"
+                    )
+            else:
+                area = st.text_input("Área/Departamento *", key="nuevo_emp_area_nueva")
+
+            email = st.text_input("Email (opcional)", key="nuevo_emp_email")
+
+        if st.button("➕ Agregar Empleado", type="primary"):
+            if nombre and apellido and area:
+                if agregar_empleado(nombre, apellido, area, email):
+                    st.success(f"✅ Empleado {nombre} {apellido} agregado exitosamente")
+                    st.rerun()
+                else:
+                    st.error("❌ Error al agregar el empleado")
+            else:
+                st.error("❌ Por favor completa todos los campos obligatorios (*)")
+
+    with tab3:
+        st.subheader("Lista de Empleados Registrados")
+
+        empleados_df = obtener_empleados()
+
+        if not empleados_df.empty:
+            # Estadísticas
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Empleados", len(empleados_df))
+            with col2:
+                st.metric("Total Áreas", len(empleados_df['area'].unique()))
+            with col3:
+                area_mayor = empleados_df['area'].value_counts().index[0]
+                st.metric("Área con más empleados", area_mayor)
+
+            st.markdown("---")
+
+            # Filtros
+            col_filtro1, col_filtro2 = st.columns(2)
+
+            with col_filtro1:
+                areas_filtro = ["Todas"] + list(empleados_df['area'].unique())
+                area_seleccionada = st.selectbox("Filtrar por Área", areas_filtro)
+
+            with col_filtro2:
+                busqueda = st.text_input("🔍 Buscar por nombre o apellido", "")
+
+            # Aplicar filtros
+            df_filtrado = empleados_df.copy()
+
+            if area_seleccionada != "Todas":
+                df_filtrado = df_filtrado[df_filtrado['area'] == area_seleccionada]
+
+            if busqueda:
+                df_filtrado = df_filtrado[
+                    df_filtrado['nombre'].str.contains(busqueda, case=False, na=False) |
+                    df_filtrado['apellido'].str.contains(busqueda, case=False, na=False)
+                ]
+
+            # Mostrar tabla
+            st.dataframe(
+                df_filtrado[['area', 'nombre', 'apellido', 'email']],
+                use_container_width=True,
+                hide_index=True
+            )
+
+            # Opción para eliminar empleados
+            if st.checkbox("🗑️ Modo Eliminación"):
+                st.warning("⚠️ **Atención**: Selecciona un empleado para eliminarlo")
+
+                # Crear lista de empleados para seleccionar
+                empleados_lista = []
+                for _, emp in empleados_df.iterrows():
+                    empleados_lista.append(
+                        f"{emp['id']} - {emp['nombre']} {emp['apellido']} ({emp['area']})"
+                    )
+
+                empleado_eliminar = st.selectbox(
+                    "Selecciona el empleado a eliminar",
+                    options=empleados_lista
+                )
+
+                if st.button("🗑️ Eliminar Empleado", type="secondary"):
+                    # Extraer ID del string seleccionado
+                    emp_id = int(empleado_eliminar.split(" - ")[0])
+                    if eliminar_empleado(emp_id):
+                        st.success("✅ Empleado eliminado exitosamente")
+                        st.rerun()
+                    else:
+                        st.error("❌ Error al eliminar el empleado")
+
+        else:
+            st.info("📭 No hay empleados registrados. Usa las pestañas superiores para agregar empleados.")
 
 elif opcion == "📊 Reportes":
     # Limpiar datos precargados si el usuario cambió manualmente de vista
